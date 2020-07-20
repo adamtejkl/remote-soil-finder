@@ -1,0 +1,204 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Jun  5 10:15:33 2020
+
+@author: adamt
+"""
+# set map coordinate system
+# import libraries
+import os
+import arcpy
+import numpy
+from arcpy.sa import *
+
+##  loading layers
+gdb_folder = r"C:\Users\adamt\Desktop\Dokumenty J\Skola\DBU\DBU"
+scene_folder = r"C:\Users\adamt\Desktop\Dokumenty J\Skola\DBU\Scenes"
+
+date = "20190422"
+Area_of_interest = "Area of interest"
+Pole = "Pole"
+
+dirs = os.listdir(scene_folder)
+for item in dirs:
+    if item[7:15] == date:
+        if item[23:26] == "B02":
+            Blue_name = item
+        elif item[23:26] == "B03":
+            Green_name = item
+        elif item[23:26] == "B04":
+            Red_name = item
+        elif item[23:26] == "B05":
+            NIR_name = item
+        else:
+            pass
+
+Blue_path = os.path.join(scene_folder, Blue_name)
+Green_path = os.path.join(scene_folder, Green_name)
+Red_path = os.path.join(scene_folder, Red_name)
+NIR_path = os.path.join(scene_folder, NIR_name)
+
+Blue = Raster(Blue_path)
+Green = Raster(Green_path)
+Red = Raster(Red_path)
+NIR = Raster(NIR_path)
+
+# To allow overwriting the outputs change the overwrite option to true.
+arcpy.env.overwriteOutput = True
+
+# parameters
+month = date[4:6]
+tolerance = 0.05
+parameters = {'01':[0.130, 0.080, 0.5, 0.069], '02':[0.071, 0.123, 0.5, 0.038], '03':[0.053, 0.136, 0.5, 0.027],
+              '04':[0.055, 0.175, 0.5, 0.036], '05':[0.082, 0.178, 0.5, 0.050], '06':[0.252, 0.056, 0.5, 0.097],
+              '07':[0.226, 0.079, 0.5, 0.088], '08':[0.07, 0.07, 0.5, 0.03], '09':[0.167, 0.121, 0.5, 0.075],
+              '10':[0.135, 0.076, 0.5, 0.058], '11':[0.07, 0.07, 0.5, 0.03], '12':[0.07, 0.07, 0.5, 0.03]}
+
+NDVI_upLimit = parameters[month][0]
+GNDVI_upLimit = parameters[month][1]
+L = parameters[month][2]
+SAVI_upLimit = parameters[month][3]
+
+# create database
+gdb_name = date + ".gdb"
+arcpy.CreateFileGDB_management(gdb_folder, gdb_name)
+
+# read from databaase
+gdbPath = os.path.join(gdb_folder, gdb_name)
+
+# Local variables:
+AOI_vertices = os.path.join(gdbPath, "AOI_vertices")
+Updated_Input_Features = AOI_vertices
+# Process: Feature Vertices To Points
+arcpy.FeatureVerticesToPoints_management(in_features=Area_of_interest, out_feature_class=AOI_vertices, point_location="ALL")
+# Process: Add XY Coordinates
+arcpy.AddXY_management(in_features=AOI_vertices)
+
+##  Get Rectangle
+X = []
+Y = []
+# Create a search cursor based on the shapefile
+TheRows=arcpy.SearchCursor(AOI_vertices)
+# Get a list with all the fields in the shapefile
+TheFields = arcpy.ListFields(AOI_vertices)
+# Loop through each row in the attributes
+for TheRow in TheRows:
+    # Loops through each of the fields for each row
+    for TheField in TheFields:
+        # Get the name of the field from the field object
+        TheFieldName=TheField.name
+        # Use the field name to get the value
+        TheValue=TheRow.getValue(TheFieldName)
+        # Get values
+        if TheField.name == 'POINT_X':
+            X.append(TheValue)
+        if TheField.name == 'POINT_Y':
+            Y.append(TheValue)
+
+Rectangle = str(min(X))+" "+str(min(Y))+" "+str(max(X))+" "+str(max(Y))
+
+## cellsize specification
+cellSize = Red.meanCellWidth
+Cell_Size = str(cellSize)+" "+str(cellSize)
+
+
+## snap layer
+arcpy.env.snapRaster = Red
+arcpy.env.overwriteOutput = True
+
+## resample of layers
+NIR_res = os.path.join(gdbPath, "NIR_" + date + "_res")
+arcpy.Resample_management(in_raster=NIR, out_raster=NIR_res, cell_size=Cell_Size, resampling_type="NEAREST")
+
+## clip
+
+# Create empty shapefiles
+Red_clip = os.path.join(gdbPath, "Red_" + date + "_clip")
+Green_clip = os.path.join(gdbPath, "Green_" + date + "_clip")
+Blue_clip = os.path.join(gdbPath, "Blue_" + date + "_clip")
+NIR_clip = os.path.join(gdbPath, "NIR_" + date + "_clip")
+
+tempEnvironment0 = arcpy.env.snapRaster
+
+arcpy.Clip_management(in_raster=Red, rectangle= Rectangle, out_raster=Red_clip, in_template_dataset=Area_of_interest, nodata_value="65535", clipping_geometry="NONE", maintain_clipping_extent="NO_MAINTAIN_EXTENT")
+arcpy.Clip_management(in_raster=Green, rectangle= Rectangle, out_raster=Green_clip, in_template_dataset=Area_of_interest, nodata_value="65535", clipping_geometry="NONE", maintain_clipping_extent="NO_MAINTAIN_EXTENT")
+arcpy.Clip_management(in_raster=Blue, rectangle= Rectangle, out_raster=Blue_clip, in_template_dataset=Area_of_interest, nodata_value="65535", clipping_geometry="NONE", maintain_clipping_extent="NO_MAINTAIN_EXTENT")
+arcpy.Clip_management(in_raster=NIR_res, rectangle= Rectangle, out_raster=NIR_clip, in_template_dataset=Area_of_interest, nodata_value="65535", clipping_geometry="NONE", maintain_clipping_extent="NO_MAINTAIN_EXTENT")
+
+arcpy.env.snapRaster = tempEnvironment0
+
+## loading of clipped layers
+Red_clip = Raster(Red_clip)
+Green_clip = Raster(Green_clip)
+Blue_clip = Raster(Blue_clip)
+NIR_clip = Raster(NIR_clip)
+## additional values specification
+lowerLeft = arcpy.Point(Red_clip.extent.XMin,Red_clip.extent.YMin)
+
+## export to numpy array
+Green_array = arcpy.RasterToNumPyArray(Green_clip,nodata_to_value=0)
+Blue_array = arcpy.RasterToNumPyArray(Blue_clip,nodata_to_value=0)
+Red_array = arcpy.RasterToNumPyArray(Red_clip,nodata_to_value=0)
+NIR_array = arcpy.RasterToNumPyArray(NIR_clip,nodata_to_value=0)
+
+## conversion to reflactance
+Green_array = Green_array/10000
+Blue_array = Blue_array/10000
+Red_array = Red_array/10000
+NIR_array = NIR_array/10000
+
+## calculation of indexes
+NDVI_array = (NIR_array-Red_array)/(NIR_array+Red_array)
+GNDVI_array = (NIR_array-Green_array)/(NIR_array+Green_array)
+SAVI_array = (1+L)*(NIR_array-Red_array)/(NIR_array+Red_array+L)
+
+# decision
+sort_NDVI = (NIR_array-Red_array)/(NIR_array+Red_array)
+for x in numpy.nditer(sort_NDVI,op_flags=['readwrite']):
+    if x < NDVI_upLimit * (1 + tolerance) and x > NDVI_upLimit * (1 - tolerance):
+        x[...]= 1
+    else:
+        x[...]= 0
+
+sort_GNDVI = (NIR_array-Green_array)/(NIR_array+Green_array)
+for x in numpy.nditer(sort_GNDVI,op_flags=['readwrite']):
+    if x < GNDVI_upLimit * (1 + tolerance) and x > GNDVI_upLimit * (1 - tolerance):
+        x[...]= 1
+    else:
+        x[...]= 0
+
+sort_SAVI = (1+L)*(NIR_array-Red_array)/(NIR_array+Red_array+L)
+for x in numpy.nditer(sort_SAVI,op_flags=['readwrite']):
+    if x < SAVI_upLimit * (1 + tolerance) and x > SAVI_upLimit * (1 - tolerance):
+        x[...]= 1
+    else:
+        x[...]= 0
+
+sort_total = sort_NDVI +sort_GNDVI + sort_SAVI
+
+## export back to raster layer
+NDVI_ras = arcpy.NumPyArrayToRaster(NDVI_array,lowerLeft,cellSize,value_to_nodata=99)
+GNDVI_ras = arcpy.NumPyArrayToRaster(GNDVI_array,lowerLeft,cellSize,value_to_nodata=99)
+SAVI_ras = arcpy.NumPyArrayToRaster(SAVI_array,lowerLeft,cellSize,value_to_nodata=99)
+sort_NDVI = arcpy.NumPyArrayToRaster(sort_NDVI,lowerLeft,cellSize,value_to_nodata=99)
+sort_GNDVI = arcpy.NumPyArrayToRaster(sort_GNDVI,lowerLeft,cellSize,value_to_nodata=99)
+sort_SAVI = arcpy.NumPyArrayToRaster(sort_SAVI,lowerLeft,cellSize,value_to_nodata=99)
+sort_total = arcpy.NumPyArrayToRaster(sort_total,lowerLeft,cellSize,value_to_nodata=99)
+
+## save raster layer
+NDVI_ras.save(os.path.join(gdbPath, "NDVI_" + date + "_ras"))
+GNDVI_ras.save(os.path.join(gdbPath, "GNDVI_" + date + "_ras"))
+SAVI_ras.save(os.path.join(gdbPath, "SAVI_" + date + "_ras"))
+sort_NDVI.save(os.path.join(gdbPath, "sort_" + date + "_NDVI"))
+sort_GNDVI.save(os.path.join(gdbPath, "sort_" + date + "_GNDVI"))
+sort_SAVI.save(os.path.join(gdbPath, "sort_" + date + "_SAVI"))
+sort_total.save(os.path.join(gdbPath, "sort_" + date + "_total"))
+
+# analysis
+bare = os.path.join(gdbPath, "bare_" + date)
+stat = os.path.join(gdbPath, "stat_" + date)
+
+# Process: Reclassify
+arcpy.Reclassify_3d(in_raster=sort_total, reclass_field="VALUE", remap="-3 0;-2 0;-1 0;1 0;2 1;3 1;NODATA 0", out_raster=bare, missing_values="DATA")
+
+#dif = 2 * Raster("20190120\\bare_20190120") - Raster("20190226\\bare_20190226")
